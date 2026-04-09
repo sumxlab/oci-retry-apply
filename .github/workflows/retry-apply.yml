@@ -2,8 +2,8 @@ name: OCI Retry Apply
 
 on:
   schedule:
-    - cron: '*/5 * * * *'   # Roda a cada 5 minutos
-  workflow_dispatch:          # Permite rodar manualmente também
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
 
 jobs:
   apply:
@@ -18,22 +18,25 @@ jobs:
           echo "$HOME/bin" >> $GITHUB_PATH
 
       - name: Configurar OCI CLI
+        env:
+          OCI_PRIVATE_KEY: ${{ secrets.OCI_PRIVATE_KEY }}
         run: |
           mkdir -p ~/.oci
-          echo "${{ secrets.OCI_PRIVATE_KEY }}" > ~/.oci/key.pem
+          printf '%s' "$OCI_PRIVATE_KEY" > ~/.oci/key.pem
           chmod 600 ~/.oci/key.pem
-          cat > ~/.oci/config << EOF
-          [DEFAULT]
-          user=${{ secrets.OCI_USER_OCID }}
-          fingerprint=${{ secrets.OCI_FINGERPRINT }}
-          tenancy=${{ secrets.OCI_TENANCY_OCID }}
-          region=${{ secrets.OCI_REGION }}
-          key_file=~/.oci/key.pem
-          EOF
+          printf '[DEFAULT]\nuser=%s\nfingerprint=%s\ntenancy=%s\nregion=%s\nkey_file=%s\n' \
+            "${{ secrets.OCI_USER_OCID }}" \
+            "${{ secrets.OCI_FINGERPRINT }}" \
+            "${{ secrets.OCI_TENANCY_OCID }}" \
+            "${{ secrets.OCI_REGION }}" \
+            "$HOME/.oci/key.pem" > ~/.oci/config
+          chmod 600 ~/.oci/config
+          echo "--- Testando autenticação ---"
+          oci iam region list --output table
 
       - name: Disparar Apply na Stack
         run: |
-          echo "⏳ Disparando Apply na stack OCI..."
+          echo "Disparando Apply na stack OCI..."
 
           OUTPUT=$(oci resource-manager job create-apply-job \
             --stack-id "${{ secrets.OCI_STACK_ID }}" \
@@ -47,20 +50,20 @@ jobs:
           echo "$OUTPUT"
 
           STATE=$(echo "$OUTPUT" | python3 -c "
-          import sys, json
-          try:
-              data = json.load(sys.stdin)
-              print(data.get('data', {}).get('lifecycle-state', 'UNKNOWN'))
-          except:
-              print('PARSE_ERROR')
-          " 2>/dev/null)
+import sys, json
+try:
+    data = json.load(sys.stdin)
+    print(data.get('data', {}).get('lifecycle-state', 'UNKNOWN'))
+except:
+    print('PARSE_ERROR')
+" 2>/dev/null)
 
           echo "Estado final: $STATE"
 
           if [ "$STATE" == "SUCCEEDED" ]; then
-            echo "✅ Apply concluído com SUCESSO!"
+            echo "Apply concluído com SUCESSO!"
             exit 0
           else
-            echo "❌ Apply falhou (estado: $STATE) — próxima tentativa em 5 minutos."
+            echo "Apply falhou (estado: $STATE) — próxima tentativa em 5 minutos."
             exit 1
           fi
