@@ -1,26 +1,65 @@
-- name: Configurar OCI CLI
-  env:
-    OCI_PRIVATE_KEY: ${{ secrets.OCI_PRIVATE_KEY }}
-  run: |
-    mkdir -p ~/.oci
+name: OCI Retry Apply
 
-    # Corrige quebras de linha da chave privada
-    echo "$OCI_PRIVATE_KEY" | sed 's/\\n/\n/g' > ~/.oci/key.pem
-    chmod 600 ~/.oci/key.pem
+on:
+  schedule:
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
 
-    # Escreve o config sem usar << (conflita com YAML)
-    {
-      echo "[DEFAULT]"
-      echo "user=${{ secrets.OCI_USER_OCID }}"
-      echo "fingerprint=${{ secrets.OCI_FINGERPRINT }}"
-      echo "tenancy=${{ secrets.OCI_TENANCY_OCID }}"
-      echo "region=${{ secrets.OCI_REGION }}"
-      echo "key_file=$HOME/.oci/key.pem"
-    } > ~/.oci/config
+jobs:
+  apply:
+    runs-on: ubuntu-latest
 
-    chmod 600 ~/.oci/config
-    oci setup repair-file-permissions --file ~/.oci/config
-    oci setup repair-file-permissions --file ~/.oci/key.pem
+    steps:
+      - name: Instalar OCI CLI
+        run: |
+          curl -L https://raw.githubusercontent.com/oracle/oci-cli/master/scripts/install/install.sh > install.sh
+          chmod +x install.sh
+          ./install.sh --accept-all-defaults
+          echo "$HOME/bin" >> $GITHUB_PATH
 
-    echo "--- Testando autenticacao ---"
-    oci iam region list --output table
+      - name: Configurar OCI CLI
+        env:
+          OCI_PRIVATE_KEY: ${{ secrets.OCI_PRIVATE_KEY }}
+          OCI_USER: ${{ secrets.OCI_USER_OCID }}
+          OCI_FINGERPRINT: ${{ secrets.OCI_FINGERPRINT }}
+          OCI_TENANCY: ${{ secrets.OCI_TENANCY_OCID }}
+          OCI_REGION: ${{ secrets.OCI_REGION }}
+        run: |
+          mkdir -p ~/.oci
+          printf '%s\n' "$OCI_PRIVATE_KEY" | sed 's/\\n/\n/g' > ~/.oci/key.pem
+          chmod 600 ~/.oci/key.pem
+          {
+            echo "[DEFAULT]"
+            echo "user=$OCI_USER"
+            echo "fingerprint=$OCI_FINGERPRINT"
+            echo "tenancy=$OCI_TENANCY"
+            echo "region=$OCI_REGION"
+            echo "key_file=$HOME/.oci/key.pem"
+          } > ~/.oci/config
+          chmod 600 ~/.oci/config
+          oci setup repair-file-permissions --file ~/.oci/config
+          oci setup repair-file-permissions --file ~/.oci/key.pem
+          echo "--- Verificando config ---"
+          cat ~/.oci/config
+          echo "--- Testando autenticacao ---"
+          oci iam region list --output table
+
+      - name: Disparar Apply na Stack
+        run: |
+          set +e
+          echo "Disparando Apply na stack OCI..."
+          oci resource-manager job create-apply-job \
+            --stack-id "${{ secrets.OCI_STACK_ID }}" \
+            --execution-plan-strategy AUTO_APPROVED \
+            --wait-for-state SUCCEEDED \
+            --wait-for-state FAILED \
+            --wait-interval-seconds 15 \
+            --max-wait-seconds 600
+          EXIT=$?
+          if [ $EXIT -eq 0 ]; then
+            echo "SUCESSO! Instancia criada com sucesso!"
+            exit 0
+          else
+            echo "Falhou — proxima tentativa em 5 minutos."
+            exit 1
+          fi
