@@ -9,35 +9,80 @@ jobs:
   apply:
     runs-on: ubuntu-latest
 
-    env:
-      OCI_CLI_USER: ${{ secrets.OCI_USER_OCID }}
-      OCI_CLI_TENANCY: ${{ secrets.OCI_TENANCY_OCID }}
-      OCI_CLI_FINGERPRINT: ${{ secrets.OCI_FINGERPRINT }}
-      OCI_CLI_KEY_CONTENT: ${{ secrets.OCI_PRIVATE_KEY }}
-      OCI_CLI_REGION: ${{ secrets.OCI_REGION }}
-
     steps:
-      - name: Testar autenticacao
-        uses: oracle-actions/run-oci-cli-command@v1.3.2
-        with:
-          command: 'iam region list --output table'
-          silent: false
+      - name: Instalar OCI CLI
+        run: pip install oci-cli
+
+      - name: Configurar OCI CLI
+        env:
+          OCI_PRIVATE_KEY: ${{ secrets.OCI_PRIVATE_KEY }}
+          OCI_USER: ${{ secrets.OCI_USER_OCID }}
+          OCI_FINGERPRINT: ${{ secrets.OCI_FINGERPRINT }}
+          OCI_TENANCY: ${{ secrets.OCI_TENANCY_OCID }}
+          OCI_REGION: ${{ secrets.OCI_REGION }}
+        run: |
+          mkdir -p ~/.oci
+
+          # Usa Python para processar a chave — mais confiável que sed
+          python3 - <<'PYEOF'
+          import os
+
+          key = os.environ.get("OCI_PRIVATE_KEY", "")
+
+          # Se a chave veio com \n literal, converte para quebras reais
+          if "\\n" in key:
+              key = key.replace("\\n", "\n")
+
+          # Garante que termina com newline
+          if not key.endswith("\n"):
+              key += "\n"
+
+          with open(os.path.expanduser("~/.oci/key.pem"), "w") as f:
+              f.write(key)
+
+          print("Chave salva com sucesso.")
+          print(f"Primeira linha: {key.splitlines()[0]}")
+          print(f"Ultima linha: {key.splitlines()[-1]}")
+          print(f"Total de linhas: {len(key.splitlines())}")
+          PYEOF
+
+          chmod 600 ~/.oci/key.pem
+
+          # Valida a chave com openssl antes de continuar
+          echo "--- Validando chave com openssl ---"
+          openssl rsa -in ~/.oci/key.pem -check -noout 2>&1 || \
+          openssl pkey -in ~/.oci/key.pem -check -noout 2>&1
+
+          # Gera o config
+          {
+            echo "[DEFAULT]"
+            echo "user=$OCI_USER"
+            echo "fingerprint=$OCI_FINGERPRINT"
+            echo "tenancy=$OCI_TENANCY"
+            echo "region=$OCI_REGION"
+            echo "key_file=$HOME/.oci/key.pem"
+          } > ~/.oci/config
+
+          chmod 600 ~/.oci/config
+
+          echo "--- Testando autenticacao ---"
+          oci iam region list --output table
 
       - name: Disparar Apply na Stack
-        uses: oracle-actions/run-oci-cli-command@v1.3.2
-        id: apply-job
-        with:
-          command: >-
-            resource-manager job create-apply-job
-            --stack-id ${{ secrets.OCI_STACK_ID }}
-            --execution-plan-strategy AUTO_APPROVED
-            --wait-for-state SUCCEEDED
-            --wait-for-state FAILED
-            --wait-interval-seconds 15
-            --max-wait-seconds 600
-          silent: false
-
-      - name: Verificar resultado
         run: |
-          echo "Job finalizado."
-          echo "Output: ${{ steps.apply-job.outputs.output }}"
+          set +e
+          oci resource-manager job create-apply-job \
+            --stack-id "${{ secrets.OCI_STACK_ID }}" \
+            --execution-plan-strategy AUTO_APPROVED \
+            --wait-for-state SUCCEEDED \
+            --wait-for-state FAILED \
+            --wait-interval-seconds 15 \
+            --max-wait-seconds 600
+          EXIT=$?
+          if [ $EXIT -eq 0 ]; then
+            echo "SUCESSO! Instancia criada!"
+            exit 0
+          else
+            echo "Falhou — proxima tentativa em 5 minutos."
+            exit 1
+          fi
