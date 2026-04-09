@@ -9,57 +9,35 @@ jobs:
   apply:
     runs-on: ubuntu-latest
 
-    steps:
-      - name: Instalar OCI CLI
-        run: |
-          curl -L https://raw.githubusercontent.com/oracle/oci-cli/master/scripts/install/install.sh > install.sh
-          chmod +x install.sh
-          ./install.sh --accept-all-defaults
-          echo "$HOME/bin" >> $GITHUB_PATH
+    env:
+      OCI_CLI_USER: ${{ secrets.OCI_USER_OCID }}
+      OCI_CLI_TENANCY: ${{ secrets.OCI_TENANCY_OCID }}
+      OCI_CLI_FINGERPRINT: ${{ secrets.OCI_FINGERPRINT }}
+      OCI_CLI_KEY_CONTENT: ${{ secrets.OCI_PRIVATE_KEY }}
+      OCI_CLI_REGION: ${{ secrets.OCI_REGION }}
 
-      - name: Configurar OCI CLI
-        env:
-          OCI_PRIVATE_KEY: ${{ secrets.OCI_PRIVATE_KEY }}
-          OCI_USER: ${{ secrets.OCI_USER_OCID }}
-          OCI_FINGERPRINT: ${{ secrets.OCI_FINGERPRINT }}
-          OCI_TENANCY: ${{ secrets.OCI_TENANCY_OCID }}
-          OCI_REGION: ${{ secrets.OCI_REGION }}
-        run: |
-          mkdir -p ~/.oci
-          printf '%s\n' "$OCI_PRIVATE_KEY" | sed 's/\\n/\n/g' > ~/.oci/key.pem
-          chmod 600 ~/.oci/key.pem
-          {
-            echo "[DEFAULT]"
-            echo "user=$OCI_USER"
-            echo "fingerprint=$OCI_FINGERPRINT"
-            echo "tenancy=$OCI_TENANCY"
-            echo "region=$OCI_REGION"
-            echo "key_file=$HOME/.oci/key.pem"
-          } > ~/.oci/config
-          chmod 600 ~/.oci/config
-          oci setup repair-file-permissions --file ~/.oci/config
-          oci setup repair-file-permissions --file ~/.oci/key.pem
-          echo "--- Verificando config ---"
-          cat ~/.oci/config
-          echo "--- Testando autenticacao ---"
-          oci iam region list --output table
+    steps:
+      - name: Testar autenticacao
+        uses: oracle-actions/run-oci-cli-command@v1.3.2
+        with:
+          command: 'iam region list --output table'
+          silent: false
 
       - name: Disparar Apply na Stack
-        run: |
-          set +e
-          echo "Disparando Apply na stack OCI..."
-          oci resource-manager job create-apply-job \
-            --stack-id "${{ secrets.OCI_STACK_ID }}" \
-            --execution-plan-strategy AUTO_APPROVED \
-            --wait-for-state SUCCEEDED \
-            --wait-for-state FAILED \
-            --wait-interval-seconds 15 \
+        uses: oracle-actions/run-oci-cli-command@v1.3.2
+        id: apply-job
+        with:
+          command: >-
+            resource-manager job create-apply-job
+            --stack-id ${{ secrets.OCI_STACK_ID }}
+            --execution-plan-strategy AUTO_APPROVED
+            --wait-for-state SUCCEEDED
+            --wait-for-state FAILED
+            --wait-interval-seconds 15
             --max-wait-seconds 600
-          EXIT=$?
-          if [ $EXIT -eq 0 ]; then
-            echo "SUCESSO! Instancia criada com sucesso!"
-            exit 0
-          else
-            echo "Falhou — proxima tentativa em 5 minutos."
-            exit 1
-          fi
+          silent: false
+
+      - name: Verificar resultado
+        run: |
+          echo "Job finalizado."
+          echo "Output: ${{ steps.apply-job.outputs.output }}"
