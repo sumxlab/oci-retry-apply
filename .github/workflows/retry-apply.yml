@@ -8,15 +8,15 @@
     echo "$OCI_PRIVATE_KEY" | sed 's/\\n/\n/g' > ~/.oci/key.pem
     chmod 600 ~/.oci/key.pem
 
-    # Usa heredoc para garantir formato correto do config
-    cat > ~/.oci/config << EOF
-    [DEFAULT]
-    user=${{ secrets.OCI_USER_OCID }}
-    fingerprint=${{ secrets.OCI_FINGERPRINT }}
-    tenancy=${{ secrets.OCI_TENANCY_OCID }}
-    region=${{ secrets.OCI_REGION }}
-    key_file=$HOME/.oci/key.pem
-    EOF
+    # Escreve o config sem usar << (conflita com YAML)
+    {
+      echo "[DEFAULT]"
+      echo "user=${{ secrets.OCI_USER_OCID }}"
+      echo "fingerprint=${{ secrets.OCI_FINGERPRINT }}"
+      echo "tenancy=${{ secrets.OCI_TENANCY_OCID }}"
+      echo "region=${{ secrets.OCI_REGION }}"
+      echo "key_file=$HOME/.oci/key.pem"
+    } > ~/.oci/config
 
     chmod 600 ~/.oci/config
     oci setup repair-file-permissions --file ~/.oci/config
