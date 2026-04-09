@@ -22,18 +22,12 @@ jobs:
           OCI_PRIVATE_KEY: ${{ secrets.OCI_PRIVATE_KEY }}
         run: |
           mkdir -p ~/.oci
-          echo "$OCI_PRIVATE_KEY" > ~/.oci/key.pem
+          echo "$OCI_PRIVATE_KEY" | tr -d '\r' > ~/.oci/key.pem
           chmod 600 ~/.oci/key.pem
           printf '[DEFAULT]\nuser=%s\nfingerprint=%s\ntenancy=%s\nregion=%s\nkey_file=%s\n' "${{ secrets.OCI_USER_OCID }}" "${{ secrets.OCI_FINGERPRINT }}" "${{ secrets.OCI_TENANCY_OCID }}" "${{ secrets.OCI_REGION }}" "$HOME/.oci/key.pem" > ~/.oci/config
           chmod 600 ~/.oci/config
-
-      - name: Verificar fingerprint real da chave
-        run: |
-          echo "--- Fingerprint configurado no Secret ---"
-          echo "${{ secrets.OCI_FINGERPRINT }}"
-          echo "--- Fingerprint real do arquivo .pem ---"
-          openssl rsa -in ~/.oci/key.pem -pubout 2>/dev/null | openssl md5 -c 2>/dev/null || \
-          openssl pkey -in ~/.oci/key.pem -pubout 2>/dev/null | openssl md5 -c
+          echo "--- Testando autenticacao ---"
+          oci iam region list --output table
 
       - name: Disparar Apply na Stack
         run: |
