@@ -1,44 +1,26 @@
-name: OCI Retry Apply
+- name: Configurar OCI CLI
+  env:
+    OCI_PRIVATE_KEY: ${{ secrets.OCI_PRIVATE_KEY }}
+  run: |
+    mkdir -p ~/.oci
 
-on:
-  schedule:
-    - cron: '*/5 * * * *'
-  workflow_dispatch:
+    # Corrige quebras de linha da chave privada
+    echo "$OCI_PRIVATE_KEY" | sed 's/\\n/\n/g' > ~/.oci/key.pem
+    chmod 600 ~/.oci/key.pem
 
-jobs:
-  apply:
-    runs-on: ubuntu-latest
+    # Usa heredoc para garantir formato correto do config
+    cat > ~/.oci/config << EOF
+    [DEFAULT]
+    user=${{ secrets.OCI_USER_OCID }}
+    fingerprint=${{ secrets.OCI_FINGERPRINT }}
+    tenancy=${{ secrets.OCI_TENANCY_OCID }}
+    region=${{ secrets.OCI_REGION }}
+    key_file=$HOME/.oci/key.pem
+    EOF
 
-    steps:
-      - name: Instalar OCI CLI
-        run: |
-          curl -L https://raw.githubusercontent.com/oracle/oci-cli/master/scripts/install/install.sh > install.sh
-          chmod +x install.sh
-          ./install.sh --accept-all-defaults
-          echo "$HOME/bin" >> $GITHUB_PATH
+    chmod 600 ~/.oci/config
+    oci setup repair-file-permissions --file ~/.oci/config
+    oci setup repair-file-permissions --file ~/.oci/key.pem
 
-      - name: Configurar OCI CLI
-        env:
-          OCI_PRIVATE_KEY: ${{ secrets.OCI_PRIVATE_KEY }}
-        run: |
-          mkdir -p ~/.oci
-          echo "$OCI_PRIVATE_KEY" | tr -d '\r' > ~/.oci/key.pem
-          chmod 600 ~/.oci/key.pem
-          printf '[DEFAULT]\nuser=%s\nfingerprint=%s\ntenancy=%s\nregion=%s\nkey_file=%s\n' "${{ secrets.OCI_USER_OCID }}" "${{ secrets.OCI_FINGERPRINT }}" "${{ secrets.OCI_TENANCY_OCID }}" "${{ secrets.OCI_REGION }}" "$HOME/.oci/key.pem" > ~/.oci/config
-          chmod 600 ~/.oci/config
-          echo "--- Testando autenticacao ---"
-          oci iam region list --output table
-
-      - name: Disparar Apply na Stack
-        run: |
-          set +e
-          echo "Disparando Apply na stack OCI..."
-          oci resource-manager job create-apply-job --stack-id "${{ secrets.OCI_STACK_ID }}" --execution-plan-strategy AUTO_APPROVED --wait-for-state SUCCEEDED --wait-for-state FAILED --wait-interval-seconds 15 --max-wait-seconds 600
-          EXIT=$?
-          if [ $EXIT -eq 0 ]; then
-            echo "SUCESSO! Instancia criada com sucesso!"
-            exit 0
-          else
-            echo "Falhou — proxima tentativa em 5 minutos."
-            exit 1
-          fi
+    echo "--- Testando autenticacao ---"
+    oci iam region list --output table
