@@ -24,48 +24,19 @@ jobs:
           mkdir -p ~/.oci
           printf '%s' "$OCI_PRIVATE_KEY" > ~/.oci/key.pem
           chmod 600 ~/.oci/key.pem
-          printf '[DEFAULT]\nuser=%s\nfingerprint=%s\ntenancy=%s\nregion=%s\nkey_file=%s\n' \
-            "${{ secrets.OCI_USER_OCID }}" \
-            "${{ secrets.OCI_FINGERPRINT }}" \
-            "${{ secrets.OCI_TENANCY_OCID }}" \
-            "${{ secrets.OCI_REGION }}" \
-            "$HOME/.oci/key.pem" > ~/.oci/config
+          printf '[DEFAULT]\nuser=%s\nfingerprint=%s\ntenancy=%s\nregion=%s\nkey_file=%s\n' "${{ secrets.OCI_USER_OCID }}" "${{ secrets.OCI_FINGERPRINT }}" "${{ secrets.OCI_TENANCY_OCID }}" "${{ secrets.OCI_REGION }}" "$HOME/.oci/key.pem" > ~/.oci/config
           chmod 600 ~/.oci/config
 
       - name: Disparar Apply na Stack
-        shell: bash
         run: |
           set +e
           echo "Disparando Apply na stack OCI..."
-
-          OUTPUT=$(oci resource-manager job create-apply-job \
-            --stack-id "${{ secrets.OCI_STACK_ID }}" \
-            --execution-plan-strategy AUTO_APPROVED \
-            --wait-for-state SUCCEEDED \
-            --wait-for-state FAILED \
-            --wait-interval-seconds 15 \
-            --max-wait-seconds 600 \
-            2>&1)
-
-          echo "--- OUTPUT COMPLETO ---"
-          echo "$OUTPUT"
-          echo "--- FIM DO OUTPUT ---"
-
-          STATE=$(echo "$OUTPUT" | python3 -c "
-import sys, json
-try:
-    data = json.load(sys.stdin)
-    print(data.get('data', {}).get('lifecycle-state', 'UNKNOWN'))
-except Exception as e:
-    print('PARSE_ERROR')
-" 2>/dev/null)
-
-          echo "Estado final: $STATE"
-
-          if [ "$STATE" == "SUCCEEDED" ]; then
-            echo "Apply concluído com SUCESSO!"
+          oci resource-manager job create-apply-job --stack-id "${{ secrets.OCI_STACK_ID }}" --execution-plan-strategy AUTO_APPROVED --wait-for-state SUCCEEDED --wait-for-state FAILED --wait-interval-seconds 15 --max-wait-seconds 600
+          EXIT=$?
+          if [ $EXIT -eq 0 ]; then
+            echo "SUCESSO! Instancia criada com sucesso!"
             exit 0
           else
-            echo "Apply falhou (estado: $STATE) — proxima tentativa em 5 minutos."
+            echo "Falhou — proxima tentativa em 5 minutos."
             exit 1
           fi
