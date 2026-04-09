@@ -31,11 +31,11 @@ jobs:
             "${{ secrets.OCI_REGION }}" \
             "$HOME/.oci/key.pem" > ~/.oci/config
           chmod 600 ~/.oci/config
-          echo "--- Testando autenticação ---"
-          oci iam region list --output table
 
       - name: Disparar Apply na Stack
+        shell: bash
         run: |
+          set +e
           echo "Disparando Apply na stack OCI..."
 
           OUTPUT=$(oci resource-manager job create-apply-job \
@@ -47,14 +47,16 @@ jobs:
             --max-wait-seconds 600 \
             2>&1)
 
+          echo "--- OUTPUT COMPLETO ---"
           echo "$OUTPUT"
+          echo "--- FIM DO OUTPUT ---"
 
           STATE=$(echo "$OUTPUT" | python3 -c "
 import sys, json
 try:
     data = json.load(sys.stdin)
     print(data.get('data', {}).get('lifecycle-state', 'UNKNOWN'))
-except:
+except Exception as e:
     print('PARSE_ERROR')
 " 2>/dev/null)
 
@@ -64,6 +66,6 @@ except:
             echo "Apply concluído com SUCESSO!"
             exit 0
           else
-            echo "Apply falhou (estado: $STATE) — próxima tentativa em 5 minutos."
+            echo "Apply falhou (estado: $STATE) — proxima tentativa em 5 minutos."
             exit 1
           fi
