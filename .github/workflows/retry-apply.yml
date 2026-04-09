@@ -22,7 +22,7 @@ jobs:
           OCI_PRIVATE_KEY: ${{ secrets.OCI_PRIVATE_KEY }}
         run: |
           mkdir -p ~/.oci
-          printf '%s' "$OCI_PRIVATE_KEY" > ~/.oci/key.pem
+          echo "$OCI_PRIVATE_KEY" > ~/.oci/key.pem
           chmod 600 ~/.oci/key.pem
           printf '[DEFAULT]\nuser=%s\nfingerprint=%s\ntenancy=%s\nregion=%s\nkey_file=%s\n' "${{ secrets.OCI_USER_OCID }}" "${{ secrets.OCI_FINGERPRINT }}" "${{ secrets.OCI_TENANCY_OCID }}" "${{ secrets.OCI_REGION }}" "$HOME/.oci/key.pem" > ~/.oci/config
           chmod 600 ~/.oci/config
