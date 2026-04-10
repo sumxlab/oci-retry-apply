@@ -1,13 +1,13 @@
 name: OCI Retry Apply
-
 on:
   schedule:
-    - cron: '*/5 * * * *'
+    - cron: '0 * * * *'   # Dispara 1x/hora como "segurança" — o loop interno cuida do resto
   workflow_dispatch:
 
 jobs:
   apply:
     runs-on: ubuntu-latest
+    timeout-minutes: 360   # Até 6h de tentativas
 
     steps:
       - name: Instalar OCI CLI
@@ -22,27 +22,19 @@ jobs:
           OCI_REGION: ${{ secrets.OCI_REGION }}
         run: |
           mkdir -p ~/.oci
-
           python3 - <<'PYEOF'
           import os
-
           key = os.environ.get("OCI_PRIVATE_KEY", "")
-
           if "\\n" in key:
               key = key.replace("\\n", "\n")
-
           if not key.endswith("\n"):
               key += "\n"
-
           with open(os.path.expanduser("~/.oci/key.pem"), "w") as f:
               f.write(key)
-
           print("Chave salva com sucesso.")
           print(f"Total de linhas: {len(key.splitlines())}")
           PYEOF
-
           chmod 600 ~/.oci/key.pem
-
           {
             echo "[DEFAULT]"
             echo "user=$OCI_USER"
@@ -51,31 +43,68 @@ jobs:
             echo "region=$OCI_REGION"
             echo "key_file=$HOME/.oci/key.pem"
           } > ~/.oci/config
-
           chmod 600 ~/.oci/config
           echo "--- Testando autenticacao ---"
           oci iam region list --output table
 
-      - name: Disparar Apply na Stack
+      - name: Retry Loop — Criar Instancia OCI
         run: |
-          set +e
-          OUTPUT=$(oci resource-manager job create-apply-job \
-            --stack-id "${{ secrets.OCI_STACK_ID }}" \
-            --execution-plan-strategy AUTO_APPROVED \
-            --wait-for-state SUCCEEDED \
-            --wait-for-state FAILED \
-            --wait-interval-seconds 15 \
-            --max-wait-seconds 600)
+          ATTEMPT=0
+          MAX_ATTEMPTS=72        # 72 × 5 min = 6 horas de tentativas
+          WAIT_SECONDS=300       # 5 minutos entre tentativas
 
-          LIFECYCLE=$(echo "$OUTPUT" | python3 -c "import sys,json; print(json.load(sys.stdin)['data']['lifecycle-state'])")
-          echo "Estado final do job: $LIFECYCLE"
+          while [ $ATTEMPT -lt $MAX_ATTEMPTS ]; do
+            ATTEMPT=$((ATTEMPT + 1))
+            echo ""
+            echo "========================================"
+            echo "Tentativa $ATTEMPT de $MAX_ATTEMPTS"
+            echo "========================================"
 
-          if [ "$LIFECYCLE" = "SUCCEEDED" ]; then
-            echo "SUCESSO! Instancia criada!"
-            exit 0
-          else
-            ERRO=$(echo "$OUTPUT" | python3 -c "import sys,json; d=json.load(sys.stdin)['data']; print(d.get('failure-details', {}).get('message', 'sem detalhes'))")
+            set +e
+            OUTPUT=$(oci resource-manager job create-apply-job \
+              --stack-id "${{ secrets.OCI_STACK_ID }}" \
+              --execution-plan-strategy AUTO_APPROVED \
+              --wait-for-state SUCCEEDED \
+              --wait-for-state FAILED \
+              --wait-interval-seconds 15 \
+              --max-wait-seconds 600 \
+              2>&1)
+            CLI_EXIT=$?
+            set -e
+
+            # Tenta extrair o lifecycle-state do JSON retornado
+            LIFECYCLE=$(echo "$OUTPUT" | python3 -c "
+          import sys, json
+          try:
+              print(json.load(sys.stdin)['data']['lifecycle-state'])
+          except Exception:
+              print('PARSE_ERROR')
+          " 2>/dev/null)
+
+            echo "Estado final do job: $LIFECYCLE"
+
+            if [ "$LIFECYCLE" = "SUCCEEDED" ]; then
+              echo "SUCESSO! Instancia criada na tentativa $ATTEMPT!"
+              exit 0
+            fi
+
+            # Extrai mensagem de erro para diagnóstico
+            ERRO=$(echo "$OUTPUT" | python3 -c "
+          import sys, json
+          try:
+              d = json.load(sys.stdin)['data']
+              print(d.get('failure-details', {}).get('message', 'sem detalhes'))
+          except Exception as e:
+              print(f'Nao foi possivel parsear o erro: {e}')
+          " 2>/dev/null)
+
             echo "Falhou: $ERRO"
-            echo "Proxima tentativa em 5 minutos."
-            exit 1
-          fi
+
+            if [ $ATTEMPT -lt $MAX_ATTEMPTS ]; then
+              echo "Aguardando ${WAIT_SECONDS}s antes da proxima tentativa..."
+              sleep $WAIT_SECONDS
+            fi
+          done
+
+          echo "FALHA: Todas as $MAX_ATTEMPTS tentativas esgotadas."
+          exit 1
